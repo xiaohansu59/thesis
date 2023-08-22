@@ -1,0 +1,319 @@
+---
+title: "Name: Xiaohan Su"
+author: 
+- |
+    | Student number: 21188261
+date: "22/8/23"
+output: html_document
+---
+# Originality declaration  
+
+I, [**Xiaohan Su**], confirm that the work presented in this assessment is my own. Where information has been derived from other sources, I confirm that this has been indicated in the work.
+
+date: [22/8/23]
+
+# Initial project scope
+
+* Variation of original question: I will focus on the year 2017 to analyse racial bias in police stops in Philadelphia. Because there is no data for 2019, and the data for 2018 is not complete (only up to April), so 2017 will be my year for exploration.
+
+* Data Sources:
+(1) Philadelphia traffic stop data from the Stanford Open Policing Project.
+(2) Police Service Area boundary shapefile for mapping and spatial analysis.
+
+* Data Wrangling and Analysis:
+(1) Clean and preprocess the data to focus on the year 2017.
+(2) Analyse the 'hit rate' for different racial groups.
+(3) Spatially visualize the distribution of police stops across Philadelphia.
+
+* Constraints:
+(1) The dataset might not capture all instances of police stops.
+(2) External factors influencing the hit rate might not be present in the dataset.
+
+
+```{r}
+# Load necessary libraries
+library(tidyverse)
+library(sf)
+library(tmap)
+library(janitor)
+library(spatstat)
+library(sp)
+library(ggplot2)
+
+```
+
+# Data Loading
+
+Read in data - note the NA value.
+
+```{r}
+philadelphia_data <- read_csv("Data/pa_philadelphia_2020_04_01.csv", na="NA")
+
+psa_boundaries <- st_read("Data/Boundaries_PSA-shp/1d53400f-66f7-45b3-86fe-6aca8d7c3b5b2020329-1-lutzgd.vpipe.shp")
+```
+
+Initial data exploration:
+
+```{r}
+# Display the first few rows
+head(philadelphia_data)
+
+head(psa_boundaries)
+
+# Plot the boundaries
+plot(psa_boundaries)
+```
+
+Checking the variable type to make sure there are no character columns that should be numeric due to NAs
+
+```{r}
+Datatypelist <- philadelphia_data %>% 
+  summarise_all(class) %>%
+  pivot_longer(everything(),
+               names_to="All_variables", 
+               values_to="Variable_class")
+
+Datatypelist
+```
+
+# Data Wrangling & Visualization
+
+Before any spatial analysis, it's essential to ensure that the datasets have the correct coordinate reference system (CRS).
+
+The traffic stop dataset contains latitude and longitude values. We need to convert these into a spatial format and ensure they are in WGS84.
+
+```{r}
+points <- philadelphia_data %>%
+  filter(lng < 0 & lat > 0) %>%
+  st_as_sf(., coords = c("lng", "lat"), crs = 4326)
+
+```
+
+First, let's make a map to get a sense of the density of points in the dataset.
+
+```{r}
+tmap_mode("plot")
+tm_shape(psa_boundaries) +
+  tm_polygons(col = NA, alpha = 0.5) +
+  tm_shape(points) +
+  tm_dots(col = "blue")
+
+```
+
+Transform the shapefile to match the CRS of the police stop data.
+
+Spatial subset: To ensure accuracy in the analysis, we need to filter out any police stop points that do not fall within the boundaries.
+
+```{r}
+psa_boundaries <- psa_boundaries %>%
+  st_transform(., 4326)
+
+points_sub <- points[psa_boundaries,]
+
+```
+
+Filtering data for 2017 that the analysis focuses on:
+
+The resulting dataset contains only traffic stops from the year 2017 where a search was conducted, and contraband was found.
+
+Because I want to understand patterns of contraband possession, and identify potential racial or geographic biases in successful stops.
+
+```{r}
+points_sub_2017 <- points_sub %>%
+  clean_names() %>%
+  filter(substr(date, 1, 4) == "2017") %>%
+  filter(search_conducted == TRUE) %>%
+  filter(contraband_found == TRUE)
+```
+
+
+It's beneficial to visualize the data after wrangling to get a preliminary understanding of the spatial distribution.
+
+```{r}
+tmap_mode("plot")
+tm_shape(psa_boundaries) +
+  tm_polygons(col = NA, alpha = 0.5) +
+  tm_shape(points_sub_2017) +
+  tm_dots(col = "blue")
+
+```
+
+Now, I want to understand the racial distribution of traffic stops in 2017 where contraband was found. 
+
+If certain racial groups have a disproportionately high number of stops with contraband found, it could indicate racial profiling or other biased policing practices.
+
+```{r}
+# Group by race and count the number of stops
+stops_by_race_2017 <- points_sub_2017 %>%
+  group_by(subject_race) %>%
+  summarise(count = n())
+
+# Plot the distribution
+ggplot(stops_by_race_2017, aes(x = subject_race, y = count)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(title = "Distribution of traffic stops with contraband found by race in 2017")
+
+```
+
+Hit rate analysis:
+Calculate the 'hit rate' for different racial groups for 2017.
+
+By analysing the hit rate by race, we can see if certain racial groups are more or less likely to have contraband when searched.
+
+```{r}
+points_sub_2017 <- points_sub %>%
+  clean_names() %>%
+  filter(substr(date, 1, 4) == "2017") %>%
+  filter(search_conducted == TRUE)
+
+hit_rate_by_race_2017 <- points_sub_2017 %>%
+  group_by(subject_race) %>%
+  summarise(hit_rate = mean(contraband_found, na.rm = TRUE))
+
+# Plot the hit rate by race
+ggplot(hit_rate_by_race_2017, aes(x = subject_race, y = hit_rate)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(title = "Proportion of successful stops (hit rate) by race in 2017")
+
+```
+
+# Point Pattern Analysis
+
+To analyse the spatial patterns of police stops in Philadelphia for 2017 and determine if they are randomly distributed or exhibit clustering.
+
+Before conducting point pattern analysis, it's essential to ensure that the data is in the correct CRS. Projected coordinates are necessary for calculating distance accurately.
+
+Here, EPSG:32129 is used for distance calculation in metres.
+
+```{r}
+points_sub_2017 <- points_sub %>%
+  clean_names() %>%
+  filter(substr(date, 1, 4) == "2017") %>%
+  filter(search_conducted == TRUE) %>%
+  filter(contraband_found == TRUE)
+
+# Project to Philadelphia-specific CRS in metres
+psa_boundaries_projected <- psa_boundaries %>%
+  st_transform(., 32129)
+
+points_sub_2017_projected <- points_sub_2017 %>%
+  st_transform(., 32129)
+
+# Create a window to define the study area
+window <- as.owin(psa_boundaries_projected)
+plot(window)
+
+# For point pattern analysis, the data needs to be in a specific format
+
+#create a sp object
+points_sub_2017_projected_sp <- points_sub_2017_projected %>%
+  as(., 'Spatial')
+
+#create a ppp object
+points_sub_2017_projected_sp.ppp <- ppp(x=points_sub_2017_projected_sp@coords[,1],
+                                        y=points_sub_2017_projected_sp@coords[,2],
+                                        window=window)
+
+```
+
+Ripley's K:
+
+Ripley's K is useful for studying the spatial distribution of point patterns. It helps determine if the observed pattern is clustered, dispersed, or random over various scales.
+
+```{r}
+K <- points_sub_2017_projected_sp.ppp %>%
+  Kest(., correction="border") %>%
+  plot()
+
+```
+
+There's clustering at smaller scales (less than around 2800m) and dispersion at larger scales (greater than 2800m). 
+
+DBSCAN can identify clusters based on the density of points.
+
+kNNdistplot plots the distance to the k-th nearest neighbour for each point. By observing where there's a sharp increase, we can estimate a suitable 'eps' value.
+
+```{r}
+# Extract the points from the spatial points data frame
+points_todf <- points_sub_2017_projected_sp %>%
+  coordinates(.) %>%
+  as.data.frame()
+
+# Perform DBSCAN clustering
+points_todf_DBSCAN <- points_todf %>%
+  fpc::dbscan(., eps = 500, MinPts = 100)
+
+# Visualize the kNN distance plot to help determine eps
+points_todf %>%
+  dbscan::kNNdistplot(., k=100)
+
+# Plot the DBSCAN results
+plot(points_todf_DBSCAN, points_todf, main = "DBSCAN Output", frame = F)
+plot(psa_boundaries_projected$geometry, add=T)
+
+```
+
+The choice of eps = 500 suggests that two police stops should be at most 500 meters apart to be considered part of the same cluster.
+
+The choice of MinPts = 100 means that a region needs to have at least 100 stops to be considered a dense cluster.
+
+Adding cluster information:
+
+```{r}
+points_todf <- points_todf %>%
+  mutate(dbcluster = points_todf_DBSCAN$cluster)
+
+```
+
+Convert the dataframe to a spatial object (sf object):
+
+```{r}
+tosf <- points_todf %>%
+  st_as_sf(., coords = c("coords.x1", "coords.x2"), crs = 32129) %>%
+  filter(dbcluster > 0)
+
+```
+
+Mapping the data
+
+Using ggplot2:
+
+```{r}
+library(ggplot2)
+library(sf)
+
+# Plot using ggplot2
+ggplot(data = psa_boundaries_projected) +
+  geom_sf() +
+  geom_sf(data = tosf, size = 0.4, colour = tosf$dbcluster, fill = tosf$dbcluster)
+
+```
+
+Using tmap:
+
+```{r}
+library(tmap)
+library(RColorBrewer)
+library(tmaptools)
+
+# Define colors for clusters
+colours <- get_brewer_pal("Set1", n = 19)
+
+# Plot using tmap
+tmap_mode("plot")
+tm_shape(psa_boundaries) +
+  tm_polygons(col = NA, alpha = 0.5) +
+  tm_shape(tosf) +
+  tm_dots(col = "dbcluster", palette = colours, style = "cat")
+
+```
+
+# Reflection
+
+* While the analysis provides valuable insights into the spatial and racial dynamics of police stops in Philadelphia for 2017, it's essential to approach the findings with a critical mindset. The results should be used as a starting point for further investigations and potential policy changes.
+
+* Future Directions: 
+(1) Conduct a more in-depth temporal analysis to understand the trends over time and identify any significant changes or anomalies.
+(2) Incorporate additional data sources, such as crime rates, socio-economic indicators, or police patrol routes, to provide more context to the findings.
