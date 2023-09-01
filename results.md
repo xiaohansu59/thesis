@@ -1,6 +1,6 @@
 ### Models Performance Summary
 
-| Model                       | RMSLE on Test Set (All Related Features) | RMSLE on Test Set (Dropped Correlated) | RMSLE on Test Set (Dropped Engineered Features) |
+| Model                       | RMSLE on Test Set (All Related Features) | RMSLE on Test Set (Dropped Highly Correlated) | RMSLE on Test Set (Dropped Engineered Features) |
 |-----------------------------|------------------------------------------|----------------------------------------|--------------------------------------------------|
 | Linear Regression (baseline)| 0.3570                                  | 0.3692                                 | 0.3817                                           |
 | Ridge Regression            | 0.3568                                  | 0.3689                                 | 0.3816                                           |
